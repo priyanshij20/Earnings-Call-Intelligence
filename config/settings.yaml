@@ -1,0 +1,63 @@
+# ============================================================
+# Earnings Call Intelligence Engine — Configuration
+# ============================================================
+
+project:
+  name: "Earnings Call Intelligence Engine"
+  version: "1.0.0"
+
+# Target companies by sector (curated for interesting stories)
+companies:
+  tech:
+    - { ticker: "AAPL", name: "Apple Inc." }
+    - { ticker: "MSFT", name: "Microsoft Corporation" }
+    - { ticker: "META", name: "Meta Platforms Inc." }   # Facebook → Meta rebrand, layoffs, AI pivot
+    - { ticker: "AMZN", name: "Amazon.com Inc." }
+    - { ticker: "NVDA", name: "NVIDIA Corporation" }    # AI boom narrative shift
+  finance:
+    - { ticker: "JPM", name: "JPMorgan Chase & Co." }
+    - { ticker: "GS",  name: "Goldman Sachs Group Inc." }
+    - { ticker: "BAC", name: "Bank of America Corp." }
+  healthcare:
+    - { ticker: "JNJ", name: "Johnson & Johnson" }
+    - { ticker: "PFE", name: "Pfizer Inc." }            # COVID vaccine boom → bust
+    - { ticker: "UNH", name: "UnitedHealth Group" }
+  retail:
+    - { ticker: "WMT", name: "Walmart Inc." }
+    - { ticker: "TGT", name: "Target Corporation" }     # Inventory crisis 2022
+    - { ticker: "COST", name: "Costco Wholesale Corp." }
+  energy:
+    - { ticker: "XOM", name: "Exxon Mobil Corporation" }
+    - { ticker: "CVX", name: "Chevron Corporation" }
+
+# Date range for transcripts
+date_range:
+  start: "2018-01-01"
+  end: "2024-12-31"
+
+# Data paths
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  market_data: "data/market"
+  features: "data/features"
+
+# NLP model configs
+models:
+  finbert:
+    model_name: "ProsusAI/finbert"
+    max_length: 512
+    batch_size: 16        # increase to 32 if you have GPU
+    device: "auto"        # auto-detects GPU, falls back to CPU
+  finbert_tone:
+    model_name: "yiyanghkust/finbert-tone"
+    max_length: 512
+    batch_size: 16
+
+# Stock return windows (trading days)
+returns:
+  windows: [1, 3, 7]
+
+# Forward-looking statement detection
+fls:
+  min_confidence: 0.5

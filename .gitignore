@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/raw/
+data/processed/
+data/market/
+data/features/
+*.pkl
+*.pkl.zip
+.env
+notebooks/.ipynb_checkpoints/

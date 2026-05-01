@@ -243,9 +243,13 @@ if __name__ == "__main__":
     check_return_distribution(df)
 
     # Level 2 — spot-check 3 transcripts
+    # Note: META 2022-Q3 is not in the Kaggle dataset (scrape ends at 2022-Q2 for this ticker)
+    # Note: NVDA 2023-Q1 correctly has only 2 remarks blocks — Jensen Huang did not deliver
+    #       prepared remarks on that call; Colette Kress (CFO) read the full script; Jensen
+    #       only appears in Q&A (25 blocks). This is not a parsing error.
     spot_check_transcript("AAPL", "2022-Q3", PROCESSED, sent_df, fls_df)
-    spot_check_transcript("META", "2022-Q3", PROCESSED, sent_df, fls_df)  # "year of efficiency"
-    spot_check_transcript("NVDA", "2023-Q1", PROCESSED, sent_df, fls_df)  # AI boom call
+    spot_check_transcript("META", "2022-Q2", PROCESSED, sent_df, fls_df)  # DAU decline + cost cut preview
+    spot_check_transcript("NVDA", "2023-Q1", PROCESSED, sent_df, fls_df)  # AI boom; Jensen in Q&A only
 
     # Level 3
     check_reproducibility()

@@ -129,7 +129,7 @@ corr_df  = load_corr()
 findings = load_findings()
 fls_df   = load_fls()
 
-ALL_TICKERS = sorted(df["ticker"].unique())
+ALL_TICKERS = sorted([t for t in df["ticker"].unique() if df[df["ticker"] == t].shape[0] >= 3])
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -163,7 +163,7 @@ if page == "Signal Discovery":
 
     # ── top stat row ──────────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
-    with c1: stat_card("Transcripts",      "137",     "16 companies · 5 sectors")
+    with c1: stat_card("Transcripts",      "137",     "16 companies · 5 sectors · 15 in timeline view")
     with c2: stat_card("Sentences scored", "68,909",  "FinBERT sentence-level")
     with c3: stat_card("Strongest signal", "ρ = −0.17", "lm_uncertainty_remarks → 1d", NEG_COL)
     with c4: stat_card("Bonferroni tests", "72",      "0 survive correction (expected)")

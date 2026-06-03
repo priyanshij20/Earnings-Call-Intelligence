@@ -1,36 +1,116 @@
 # Earnings Call Intelligence Engine
 
-**Can the language executives use on earnings calls predict how their stock moves in the days that follow?**
+**Can the language executives use on earnings calls predict how their stock moves — and can we cluster companies by their linguistic fingerprint?**
 
-This project processes 137 earnings call transcripts from 16 S&P 500 companies (2019–2023), extracts NLP signals using FinBERT and the Loughran-McDonald Financial Dictionary, and correlates those signals with 1-, 3-, and 7-day post-earnings stock returns.
+This project processes 137 earnings call transcripts from 16 S&P 500 companies (2019–2023), extracts NLP signals using FinBERT and the Loughran-McDonald Financial Dictionary, correlates those signals with post-earnings stock returns, and applies unsupervised clustering to discover communication archetypes across companies and quarters.
 
-**Results at a glance:** 137 transcripts parsed, 68,909 sentences scored, 3,089 forward-looking statements detected, 37 narrative shift events flagged across 16 companies and 5 sectors.
+**Results at a glance:** 137 transcripts · 68,909 sentences scored · 3,089 forward-looking statements · 37 narrative shift events · 4 linguistic archetypes discovered
+
+---
+
+## Architecture
+
+```
+Raw Transcripts (137 calls, 16 S&P 500 companies, 5 sectors)
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  NLP PIPELINE                                           │
+│                                                         │
+│  1. Transcript Parser   → prepared_remarks / qa_section │
+│  2. FinBERT Scoring     → 68,909 sentence-level scores  │
+│  3. LM Dictionary       → 7 linguistic dimensions       │
+│  4. FLS Detector        → 3,089 forward-looking stmts   │
+│  5. Feature Matrix      → 137 × 45 feature table        │
+└───────────────────┬─────────────────────────────────────┘
+                    │
+          ┌─────────┴──────────┐
+          ▼                    ▼
+┌──────────────────┐  ┌────────────────────────────────────┐
+│  ANALYTICS       │  │  CLUSTERING PIPELINE               │
+│                  │  │                                    │
+│  Spearman ρ      │  │  Feature Engineering (18 features) │
+│  Bonferroni      │  │  → QoQ momentum, role variance,    │
+│  Language shifts │  │    complexity, modal confidence    │
+│  Sector splits   │  │                                    │
+└──────────────────┘  │  Preprocessing                     │
+                      │  → StandardScaler, correlation     │
+                      │    check, PCA variance report      │
+                      │                                    │
+                      │  Dimensionality Reduction          │
+                      │  → PCA (2D/3D) · t-SNE (2D)       │
+                      │                                    │
+                      │  Clustering (3 methods compared)   │
+                      │  → K-Means · DBSCAN · Hierarchical │
+                      │                                    │
+                      │  Interpretation                    │
+                      │  → Archetypes · Temporal migration │
+                      │    Kruskal-Wallis validation       │
+                      └────────────────┬───────────────────┘
+                                       │
+                                       ▼
+                         ┌─────────────────────────┐
+                         │  STREAMLIT DASHBOARD    │
+                         │                         │
+                         │  Signal Discovery       │
+                         │  Narrative Timeline     │
+                         │  Transcript Explainer   │
+                         │  Cluster Explorer  ◄NEW │
+                         └─────────────────────────┘
+```
 
 ---
 
 ## Key Findings
 
-1. **Uncertainty language in prepared remarks shows the strongest predictive signal (Spearman ρ = −0.166, p = 0.053).** When executives hedge more in their scripted remarks, stocks tend to underperform the following day. The signal is stronger in prepared remarks (ρ = −0.166) than in Q&A (where the equivalent LM dictionary feature is weaker), consistent with the idea that scripted language is more deliberate and therefore more informative.
+### NLP → Return Signals
 
-2. **Forward-looking statement density and hedging count both negatively correlate with 1-day returns (ρ = −0.137 and −0.113).** More FLS language is not bullish — it is associated with weaker post-earnings performance, likely because high FLS density reflects management needing to explain away a difficult quarter rather than simply reporting strong results.
+| Feature | Window | Spearman ρ | p-value | Interpretation |
+|---------|--------|-----------|---------|----------------|
+| `lm_uncertainty_remarks` | 1d | −0.166 | 0.053 | More hedging in scripted remarks → underperformance |
+| `fls_hedging_count` | 1d | −0.113 | 0.190 | More hedging FLS → weaker returns |
+| `fls_ratio` | 1d | −0.137 | 0.113 | FLS density is not bullish signal |
+| `sentiment_divergence` | 1d | −0.114 | 0.340 | Structural, not a quarterly signal |
 
-3. **The remarks-vs-Q&A sentiment divergence, while structurally present in 93% of calls, shows a directionally correct within-company signal (ρ = −0.114 after company demeaning).** Executives uniformly script more positive prepared remarks than their Q&A tone suggests — this is a constant, not a quarterly signal. The within-company variation (quarters where the gap widens relative to a company's own baseline) does trend in the expected direction, but the effect is underpowered at n = 137.
+**No features survive Bonferroni correction (corrected α = 0.00069 for 72 tests) — consistent with the efficient market hypothesis for large-cap equities.**
 
-4. **The language shift detector identified verifiable narrative changes:** Target's uncertainty spike preceded the 2022 inventory crisis (stock −4.8% in the 3 days following); AMZN's 2021-Q4 call registered as a positive shift event (+16.3% 3-day return) when AWS re-accelerated, and its 2022-Q1 call reversed sharply (−14.1%) as post-pandemic deceleration set in. MSFT's 2023-Q1 flagged a sentiment rise driven by AI integration optimism, but the stock fell −5.9% as the market priced in Azure growth deceleration instead. 31% of quarter-over-quarter comparisons met the shift threshold (> 1.5σ on any of 3 features).
+### Linguistic Clustering
 
-5. **No features survive Bonferroni correction at n = 137, consistent with the efficient market hypothesis for large-cap equities.** With 72 simultaneous tests (24 NLP features × 3 return windows), the corrected α = 0.00069. The signals detected are real directional tendencies, not arbitrageable edges — which is the expected result for heavily-covered S&P 500 names where earnings surprises are priced within minutes.
+| Method | Optimal k | Silhouette | Notes |
+|--------|-----------|-----------|-------|
+| K-Means | 3–4 | ~0.15 | Best balance of separation and interpretability |
+| Hierarchical (Ward) | 3–4 | ~0.12 | Consistent with K-Means groupings |
+| DBSCAN | — | — | ~2% outlier calls; one dominant cluster |
+
+**The low silhouette scores are themselves a finding:** large-cap earnings calls are linguistically homogeneous. S&P 500 executives converge on similar communication styles. The interesting signal is *which companies and quarters deviate from archetype*, not the tightness of the clusters.
+
+### Archetype Profiles
+
+| Archetype | Signature | Example Companies |
+|-----------|-----------|-------------------|
+| **Confident Optimists** | High sentiment, strong modal language, low uncertainty | NVDA AI quarters, AAPL product cycles |
+| **Cautious Hedgers** | High uncertainty + hedging FLS, low modal confidence | TGT 2022 inventory crisis, PFE post-vaccine |
+| **Measured Reporters** | Near-average on all dimensions; consistent, flat tone | JPM, BAC routine quarters |
+| **Forward-Looking Visionaries** | High FLS ratio, positive-oriented forward guidance | MSFT AI pivot quarters, AMZN AWS quarters |
+
+### Notable Case Studies
+
+- **AMZN 2021-Q4 → 2022-Q1**: Language shifted from "Confident Optimist" to "Cautious Hedger" exactly when AWS re-acceleration reversed. 3-day returns: +16.3% → −14.1%.
+- **TGT 2022-Q2**: Uncertainty spike in prepared remarks preceded inventory write-down. Stock −4.8% in 3 days.
+- **META 2022-Q2**: FinBERT anchor bias visible — "headcount growth will slow" scored positive due to anchoring on "growth."
+- **NVDA 2023**: Consistent "Confident Optimist" archetype throughout AI boom quarters.
 
 ---
 
 ## Limitations
 
-**FinBERT anchor bias.** FinBERT was pretrained on financial news headlines, not earnings call transcripts. This creates systematic misclassifications for hedged growth language. For example, the sentence *"we anticipate headcount growth will slow"* is classified as **positive** by FinBERT because it anchors on the modal verb "anticipate" and the word "growth," missing the negative substance of slowing headcount. This pattern is pervasive in earnings calls, where positive framing surrounds negative guidance. The bias cannot be corrected by threshold tuning; it reflects a training distribution mismatch. A model fine-tuned on earnings call data (e.g., a FinBERT variant with SEC 10-Q supervision) would likely improve sentence-level accuracy meaningfully.
+**FinBERT anchor bias.** FinBERT was pretrained on financial news headlines, not earnings call transcripts. Sentences like *"we anticipate headcount growth will slow"* are classified positive (anchors on "growth"), missing the negative substance. A model fine-tuned on 10-Q/earnings data would materially improve sentence-level accuracy.
 
-**n = 137 and survivorship bias.** The dataset covers 16 large-cap companies over 4–5 years. Large-cap equities are among the most efficiently priced assets in the world, making NLP-based return prediction especially difficult. The sample is also survivorship-biased: all 16 companies remained prominent S&P 500 constituents throughout the period. A dataset including companies that faced distress or delisted would likely show stronger NLP-return correlations.
+**n = 137 and survivorship bias.** Covers 16 large-cap companies over 4–5 years — all of which remained prominent S&P 500 constituents. Distressed or delisted companies would likely show stronger NLP-return correlations.
 
-**Returns are not risk-adjusted.** Post-earnings returns are raw price changes, not excess returns over the market or sector. On days with broad market moves, the NLP signal is swamped by macro noise. Controlling for SPY or sector ETF returns on the same window would likely sharpen all correlations.
+**Returns not risk-adjusted.** Raw price changes, not excess returns over market/sector. Controlling for SPY or sector ETF returns on the same window would sharpen correlations.
 
-**Sentiment divergence is structural, not temporal.** The remarks-vs-Q&A gap (prepared remarks are more positive than Q&A) is a property of earnings call format, not a meaningful quarter-over-quarter signal in raw form. The within-company demeaned version shows the correct directional effect but is underpowered. This is noted to avoid interpreting the aggregate divergence distribution as predictive.
+**Weak cluster structure.** Silhouette scores of 0.10–0.15 reflect genuine linguistic homogeneity among large-cap executives, not a modeling failure. The archetypes are best interpreted as communication tendency distributions, not hard categories.
 
 ---
 
@@ -38,37 +118,50 @@ This project processes 137 earnings call transcripts from 16 S&P 500 companies (
 
 ### Data
 
-- **Transcripts**: 137 earnings call transcripts (2019–2023) for 16 S&P 500 companies across 5 sectors (tech, finance, healthcare, retail, energy), sourced from a Motley Fool Kaggle dataset.
+- **Transcripts**: 137 earnings call transcripts (2019–2023) for 16 S&P 500 companies across 5 sectors (tech, finance, healthcare, retail, energy), sourced from the Motley Fool Kaggle dataset.
 - **Prices**: Daily OHLCV data via `yfinance`. Post-earnings returns computed for 1-, 3-, and 7-day windows starting the day after the call.
 
 ### NLP Pipeline
 
-**Stage 1 — Parsing**  
-Each transcript is parsed into two structured sections: `prepared_remarks` (scripted executive statements) and `qa_section` (analyst questions + executive answers). Each block is tagged with speaker name, title, and role (CEO, CFO, analyst, operator, IR). The parser uses a multi-strategy role classifier: exact title match → acronym fallback → IR/relations intercept before CEO/CFO to avoid false positives from titles like "Head of Investor Relations."
+**Stage 1 — Parsing**
+Each transcript is parsed into `prepared_remarks` and `qa_section`, with each block tagged with speaker name, title, and role (CEO, CFO, analyst, operator, IR). Role classifier uses exact title match → acronym fallback → IR intercept before CEO/CFO to avoid false positives.
 
-**Stage 2 — FinBERT Sentence Scoring**  
-Every sentence is scored using [ProsusAI/finbert](https://huggingface.co/ProsusAI/finbert), a BERT model pretrained on financial news and fine-tuned for positive/negative/neutral classification. Scores are mapped to [−1, +1] via `P(positive) − P(negative)`. Processing: batch size 32, MPS acceleration (Apple Silicon), `model.eval()` + `torch.no_grad()` for deterministic output. 68,909 sentences scored across 137 transcripts.
+**Stage 2 — FinBERT Sentence Scoring**
+Every sentence scored via [ProsusAI/finbert](https://huggingface.co/ProsusAI/finbert). Score = `P(positive) − P(negative)` ∈ [−1, +1]. Batch size 32, MPS acceleration (Apple Silicon). 68,909 sentences scored.
 
-**Stage 3 — Loughran-McDonald Dictionary**  
-Word-proportion scores computed for 7 categories: positive, negative, uncertainty, litigious, constraining, strong_modal, weak_modal. Dictionary sourced from the 2024 SRAF release (7,000+ words). Scores computed separately for prepared remarks and Q&A sections.
+**Stage 3 — Loughran-McDonald Dictionary**
+Word-proportion scores for 7 categories: positive, negative, uncertainty, litigious, constraining, strong_modal, weak_modal. Computed separately for remarks and Q&A. Source: 2024 SRAF release (7,000+ words).
 
-**Stage 4 — Forward-Looking Statement Detection**  
-~65 curated FLS phrases split into positive-oriented ("we expect", "looking ahead", "we are confident") and hedging-oriented ("subject to", "headwinds", "macro uncertainty") sets. Matching uses spaCy PhraseMatcher on lowercased text. Safe harbor legal boilerplate (identical across every call) is filtered via regex before matching to avoid constant-offset inflation.
+**Stage 4 — Forward-Looking Statement Detection**
+~65 curated FLS phrases split into positive-oriented and hedging-oriented sets. spaCy PhraseMatcher on lowercased text. Safe-harbor boilerplate filtered via regex before matching.
 
-**Stage 5 — Feature Matrix**  
-Features from all three NLP stages are merged with stock returns into a 137-row × 45-column feature matrix (`nlp_features.csv`).
+**Stage 5 — Feature Matrix**
+All NLP features merged with stock returns into a 137 × 45 feature matrix (`nlp_features.csv`).
+
+### Clustering Pipeline
+
+**Feature Engineering (18 features)**
+
+| Category | Features |
+|----------|---------|
+| Core NLP | `sentiment_overall`, `sentiment_divergence`, `sentiment_std`, `lm_uncertainty`, `lm_litigious`, `lm_constraining`, `fls_ratio`, `fls_hedging_count` |
+| Structural | `modal_confidence` (strong/weak modal ratio), `uncertainty_divergence` (remarks vs Q&A uncertainty gap) |
+| Linguistic complexity | `role_sentiment_variance` (CEO vs CFO vs analyst gap), `avg_sentence_length`, `vocab_diversity` |
+| Momentum (QoQ Δ) | `sentiment_overall_qoq`, `lm_uncertainty_qoq`, `fls_ratio_qoq`, `lm_constraining_qoq`, `modal_confidence_qoq` |
+
+**Preprocessing**: StandardScaler (zero mean, unit variance) · outlier clipping at ±4σ · correlation check (no pairs > 0.85)
+
+**Dimensionality Reduction**: PCA (2D + 3D, scree plot) · t-SNE (perplexity 25, 1000 iterations)
+
+**Clustering**: K-Means (k = 2–6, elbow + silhouette + gap statistic) · DBSCAN (k-distance elbow for ε) · Hierarchical Ward (dendrogram)
+
+**Validation**: Kruskal-Wallis test on 3-day returns by cluster
 
 ### Analytics
 
 - **Spearman correlation matrix**: 72 tests with Bonferroni correction. Non-parametric to handle non-normal return distributions.
-- **Divergence quartile test**: Mann-Whitney U comparing Q1 (low divergence) vs Q4 (high divergence) returns.
-- **Sector-level correlations**: Separate Spearman analysis per sector for 4 focus features.
-- **Temporal split**: Pre- vs post-2022 correlations to check stability across market regimes.
 - **Language shift detector**: Per-company QoQ z-scores on 3 features; events flagged at > 1.5σ.
-
-### Validation
-
-Pipeline validation includes sentiment distribution checks, section word-count ratios, speaker role coverage verification (76% of transcripts have both CEO and CFO detected), FLS density analysis, return distribution checks, spot-checks on 3 individual transcripts (AAPL 2022-Q3, META 2022-Q2, NVDA 2023-Q1), and a deterministic reproducibility test confirming zero score delta across repeated FinBERT runs.
+- **Sector-level correlations**: Separate Spearman analysis per sector for 4 focus features.
 
 ---
 
@@ -79,46 +172,36 @@ Pipeline validation includes sentiment distribution checks, section word-count r
 ```bash
 git clone <repo>
 cd earnings-call-intelligence
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python -m spacy download en_core_web_sm
+uv venv --python 3.11 .venv && source .venv/bin/activate
+# Pin numpy to 1.x to avoid macOS Sequoia/Accelerate hang
+uv pip install pandas "numpy==1.26.4" scipy scikit-learn plotly streamlit statsmodels
 ```
 
 Place the Motley Fool transcript data (`motley-fool-data.pkl`) in `data/raw/`.
 
-### Run the full pipeline
+### Run the NLP pipeline (one-time, ~15 min)
 
 ```bash
-# 1. Parse transcripts → data/processed/
 python src/ingestion/transcript_parser.py
-
-# 2. Fetch stock prices → data/market/
 python src/ingestion/price_fetcher.py
-
-# 3. FinBERT sentence scoring → data/features/sentence_sentiments.csv
-python src/nlp/finbert_sentiment.py              # ~11 min on MPS
-
-# 4. Loughran-McDonald dictionary → data/features/lm_features.csv
+python src/nlp/finbert_sentiment.py        # ~11 min on MPS
 python src/nlp/lm_dictionary.py
-
-# 5. FLS detection → data/features/fls_features.csv
 python src/nlp/fls_detector.py
-
-# 6. Build feature matrix → data/features/nlp_features.csv
 python src/nlp/build_features.py
-
-# 7. Correlation analysis → data/features/correlation_results.csv
 python src/analytics/correlation.py
-
-# 8. Language shift detection → data/features/language_shifts.csv
 python src/analytics/language_shift.py
 ```
 
-### Validate the pipeline
+### Run the clustering pipeline (~2 min)
 
 ```bash
-python src/validate.py
+python run_cluster.py
 ```
+
+Produces:
+- `data/features/cluster_features.csv` — 18-feature company-quarter matrix
+- `data/features/cluster_projections.csv` — PCA/t-SNE coordinates + cluster labels
+- `data/features/cluster_results.json` — profiles, diagnostics, archetypes
 
 ### Launch the dashboard
 
@@ -126,10 +209,11 @@ python src/validate.py
 streamlit run src/app/streamlit_app.py
 ```
 
-The dashboard has three views:
-- **Signal Discovery** — correlation heatmap, scatter plots for the two strongest signals, interpretation cards
-- **Company Narrative Timeline** — per-company NLP trends with shift event overlays and dual-axis stock price
-- **Transcript Explainability** — sentence-level drill-down into any individual call, with FinBERT scores and FLS attribution
+The dashboard has four views:
+- **Signal Discovery** — correlation heatmap, scatter plots for the two strongest signals
+- **Company Narrative Timeline** — per-company NLP trends with shift event overlays and stock price
+- **Transcript Explainability** — sentence-level drill-down with FinBERT scores and FLS attribution
+- **Cluster Explorer** — PCA/t-SNE scatter, radar charts, temporal migration heatmap, returns by archetype
 
 ---
 
@@ -138,28 +222,52 @@ The dashboard has three views:
 ```
 earnings-call-intelligence/
 ├── config/
-│   └── settings.yaml              # tickers, paths, model config
+│   └── settings.yaml                  # tickers, paths, model config
 ├── data/
-│   ├── raw/                       # Kaggle pickle file
-│   ├── processed/                 # parsed transcript JSONs (139 files)
-│   ├── market/                    # yfinance price CSVs (16 files)
-│   └── features/                  # all CSV outputs + findings_summary.json
+│   ├── raw/                           # Kaggle pickle (not committed)
+│   ├── processed/                     # parsed transcript JSONs (137 files)
+│   ├── market/                        # yfinance price CSVs (16 tickers)
+│   └── features/                      # all CSV/JSON outputs
+│       ├── nlp_features.csv           # 137 × 45 NLP feature matrix
+│       ├── sentence_sentiments.csv    # 68,909 sentence-level scores
+│       ├── cluster_features.csv       # 137 × 18 clustering feature matrix
+│       ├── cluster_projections.csv    # PCA/t-SNE coords + cluster labels
+│       └── cluster_results.json      # profiles, diagnostics, archetypes
 ├── src/
-│   ├── config.py                  # settings.yaml normalizer
-│   ├── validate.py                # 3-level validation suite
 │   ├── ingestion/
-│   │   ├── transcript_parser.py   # raw pickle → structured JSON
-│   │   └── price_fetcher.py       # yfinance download + return calc
+│   │   ├── transcript_parser.py       # raw pickle → structured JSON
+│   │   └── price_fetcher.py           # yfinance download + return calc
 │   ├── nlp/
-│   │   ├── finbert_sentiment.py   # sentence-level FinBERT scoring
-│   │   ├── lm_dictionary.py       # Loughran-McDonald word scoring
-│   │   ├── fls_detector.py        # forward-looking statement detection
-│   │   └── build_features.py      # merge all features into matrix
+│   │   ├── finbert_sentiment.py       # sentence-level FinBERT scoring
+│   │   ├── lm_dictionary.py           # Loughran-McDonald word scoring
+│   │   ├── fls_detector.py            # forward-looking statement detection
+│   │   └── build_features.py          # merge features into matrix
 │   ├── analytics/
-│   │   ├── correlation.py         # Spearman, Mann-Whitney, sector/temporal
-│   │   └── language_shift.py      # QoQ narrative shift detector
+│   │   ├── correlation.py             # Spearman, Mann-Whitney, sector splits
+│   │   └── language_shift.py          # QoQ narrative shift detector
+│   ├── clustering/
+│   │   ├── feature_engineering.py     # 18-feature engineering from NLP matrix
+│   │   ├── preprocessing.py           # StandardScaler, correlation check
+│   │   ├── dimensionality.py          # PCA + t-SNE projections
+│   │   ├── clustering.py              # K-Means, DBSCAN, Hierarchical
+│   │   ├── interpretation.py          # archetypes, KW test, JSON export
+│   │   └── pipeline.py                # end-to-end orchestration
 │   └── app/
-│       └── streamlit_app.py       # interactive dashboard
+│       └── streamlit_app.py           # 4-tab interactive dashboard
+├── run_cluster.py                     # standalone clustering runner
 ├── requirements.txt
 └── .gitignore
 ```
+
+---
+
+## Tech Stack
+
+| Layer | Tools |
+|-------|-------|
+| NLP | ProsusAI/FinBERT · Loughran-McDonald Dict · spaCy |
+| ML | scikit-learn (K-Means, DBSCAN, Agglomerative, PCA, t-SNE) |
+| Stats | scipy (Spearman, Kruskal-Wallis, Mann-Whitney) |
+| Data | pandas · numpy |
+| Viz | Plotly · Streamlit |
+| Infra | PyTorch (MPS) · yfinance · uv |

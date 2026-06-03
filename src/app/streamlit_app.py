@@ -71,6 +71,23 @@ def load_fls():
     return pd.read_csv(FEAT_DIR / "fls_sentences.csv")
 
 @st.cache_data
+def load_cluster_projections():
+    p = FEAT_DIR / "cluster_projections.csv"
+    if not p.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(p)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+@st.cache_data
+def load_cluster_results():
+    p = FEAT_DIR / "cluster_results.json"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return json.load(f)
+
+@st.cache_data
 def load_prices(ticker: str) -> pd.DataFrame:
     csv = MKT_DIR / f"{ticker}.csv"
     if not csv.exists():
@@ -80,6 +97,10 @@ def load_prices(ticker: str) -> pd.DataFrame:
     return df[df.index.notna()].sort_index()
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+def color_return(val):
+    if pd.isna(val): return ""
+    return f"color: {POS_COL}" if val > 0 else f"color: {NEG_COL}"
+
 def dark_layout(fig, height=420, margin=None):
     fig.update_layout(
         height=height,
@@ -138,7 +159,8 @@ with st.sidebar:
     st.markdown("---")
     page = st.radio(
         "View",
-        ["Signal Discovery", "Company Narrative Timeline", "Transcript Explainability"],
+        ["Signal Discovery", "Company Narrative Timeline",
+         "Transcript Explainability", "Cluster Explorer"],
     )
     st.markdown("---")
     st.markdown(
@@ -212,7 +234,7 @@ if page == "Signal Discovery":
         yaxis=dict(tickformat=".1%", gridcolor="#1e2530"),
         legend=dict(orientation="h", y=-0.18, font=dict(size=11)),
     )
-    st.plotly_chart(fig_lead, use_container_width=True)
+    st.plotly_chart(fig_lead, width="stretch")
 
     st.markdown("---")
 
@@ -261,7 +283,7 @@ if page == "Signal Discovery":
     )
     dark_layout(fig_heat, height=440, margin=dict(l=200, r=20, t=20, b=20))
     fig_heat.update_layout(yaxis=dict(tickfont=dict(size=11)))
-    st.plotly_chart(fig_heat, use_container_width=True)
+    st.plotly_chart(fig_heat, width="stretch")
     st.caption("\\* p < 0.05 (uncorrected) · ◀ 1-day column bordered in amber. No features survive Bonferroni correction — consistent with EMH for large-cap equities at n=137.")
 
     st.markdown("---")
@@ -293,7 +315,7 @@ if page == "Signal Discovery":
             yaxis=dict(tickformat=".1%", gridcolor="#1e2530"),
             legend=dict(orientation="h", y=-0.22, font=dict(size=10)),
         )
-        st.plotly_chart(fig_sc2, use_container_width=True)
+        st.plotly_chart(fig_sc2, width="stretch")
     with col_interp:
         st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
         st.markdown(
@@ -465,7 +487,7 @@ elif page == "Company Narrative Timeline":
         yaxis2=dict(gridcolor="#1e2530"),
         barmode="relative",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.caption("⚡ = language shift event (>1.5 σ QoQ change). Shaded band = ±20 days around shift.")
 
     # ── quarter metrics table ─────────────────────────────────────────────────
@@ -473,9 +495,6 @@ elif page == "Company Narrative Timeline":
                  "lm_uncertainty", "fls_hedging_count", "return_1d", "return_3d"]
     show_cols = [c for c in show_cols if c in co_df.columns]
 
-    def color_return(val):
-        if pd.isna(val): return ""
-        return f"color: {POS_COL}" if val > 0 else f"color: {NEG_COL}"
 
     styled = (
         co_df[show_cols].set_index("quarter")
@@ -491,7 +510,7 @@ elif page == "Company Narrative Timeline":
         .map(color_return, subset=["return_1d", "return_3d"])
     )
     with st.expander("Quarterly data table"):
-        st.dataframe(styled, use_container_width=True)
+        st.dataframe(styled, width="stretch")
 
     # ── shift event detail ────────────────────────────────────────────────────
     if not co_shift.empty:
@@ -637,7 +656,7 @@ elif page == "Transcript Explainability":
                     font=dict(color="white", size=11),
                     xaxis=dict(gridcolor="#1e2530"),
                 )
-                st.plotly_chart(fig_role, use_container_width=True)
+                st.plotly_chart(fig_role, width="stretch")
 
     st.markdown("---")
 
@@ -703,3 +722,394 @@ elif page == "Transcript Explainability":
                 f"<span style='color:#ddd'>{r['sentence'][:240]}</span></div>",
                 unsafe_allow_html=True,
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIEW 4 — Cluster Explorer
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "Cluster Explorer":
+    st.title("Cluster Explorer")
+    st.caption(
+        "Unsupervised clustering of 137 earnings calls across 18 linguistic features. "
+        "K-Means · DBSCAN · Hierarchical — compared and interpreted."
+    )
+
+    clust_df   = load_cluster_projections()
+    clust_res  = load_cluster_results()
+
+    if clust_df.empty or not clust_res:
+        st.warning(
+            "Cluster data not yet generated. "
+            "Run `python run_cluster.py` from the project root to produce it."
+        )
+        st.stop()
+
+    # ── sidebar controls ──────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("---")
+        method_choice = st.radio(
+            "Clustering method",
+            ["K-Means (optimal k)", "Hierarchical (Ward)", "DBSCAN"],
+            index=0,
+        )
+        projection_choice = st.radio("Projection", ["PCA", "t-SNE"], index=0)
+        color_by = st.radio(
+            "Color by",
+            ["Cluster / Archetype", "Sector", "Sentiment", "Uncertainty"],
+            index=0,
+        )
+
+    cluster_col = {
+        "K-Means (optimal k)": "cluster_km",
+        "Hierarchical (Ward)": "cluster_hc",
+        "DBSCAN":              "cluster_db",
+    }[method_choice]
+
+    # attach archetype names (always from K-Means profiles) and build a
+    # per-method label column so every chart reflects the current selection
+    profiles_raw = clust_res.get("profiles", [])
+    prof_df = pd.DataFrame(profiles_raw) if profiles_raw else pd.DataFrame()
+
+    if not prof_df.empty and "cluster" in prof_df.columns and "archetype" in prof_df.columns:
+        archetype_map = dict(zip(prof_df["cluster"].astype(int), prof_df["archetype"]))
+        clust_df["archetype"] = clust_df["cluster_km"].map(archetype_map)
+    else:
+        clust_df["archetype"] = clust_df["cluster_km"].astype(str)
+
+    # build a display label for the active method
+    if cluster_col == "cluster_db":
+        clust_df["_label"] = clust_df[cluster_col].apply(
+            lambda x: "Outlier" if x == -1 else f"Cluster {int(x)}"
+        )
+    elif cluster_col == "cluster_km":
+        clust_df["_label"] = clust_df["archetype"]
+    else:
+        clust_df["_label"] = clust_df[cluster_col].apply(
+            lambda x: f"Cluster {int(x)}" if pd.notna(x) else "—"
+        )
+
+    # ── top stat row ──────────────────────────────────────────────────────────
+    km_diag = clust_res.get("km_diagnostics", {})
+    optimal_k = km_diag.get("optimal_k", "?")
+    sil_scores = km_diag.get("silhouette_scores", [])
+    best_sil = max(sil_scores) if sil_scores else 0
+
+    returns_stats = clust_res.get("returns_by_cluster", {})
+    kw_p = returns_stats.get("p_value")
+
+    n_outliers = (clust_df["cluster_db"] == -1).sum() if "cluster_db" in clust_df.columns else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: stat_card("Optimal Clusters", str(optimal_k), "K-Means silhouette")
+    with c2: stat_card("Best Silhouette", f"{best_sil:.3f}", "higher is better (max 1.0)")
+    with c3: stat_card("DBSCAN Outliers", str(n_outliers), f"{n_outliers/len(clust_df):.1%} of calls")
+    with c4: stat_card(
+        "KW p-value (returns)",
+        f"{kw_p:.3f}" if kw_p is not None else "—",
+        "cluster vs 3d return",
+        POS_COL if (kw_p is not None and kw_p < 0.05) else NEU_COL,
+    )
+
+    st.markdown("---")
+
+    # ── main scatter plot (PCA or t-SNE) ──────────────────────────────────────
+    x_col = "pca_1" if projection_choice == "PCA" else "tsne_1"
+    y_col = "pca_2" if projection_choice == "PCA" else "tsne_2"
+
+    # build color variable
+    clust_df["sector"] = clust_df["ticker"].map(TICKER_TO_SECTOR)
+    if color_by == "Cluster / Archetype":
+        color_col  = "_label"
+        color_disc = True
+    elif color_by == "Sector":
+        color_col  = "sector"
+        color_disc = True
+    elif color_by == "Sentiment":
+        color_col  = "sentiment_overall"
+        color_disc = False
+    else:
+        color_col  = "lm_uncertainty"
+        color_disc = False
+
+    hover_data = ["ticker", "quarter", "_label", "sector", "return_3d"]
+    hover_data = [c for c in hover_data if c in clust_df.columns]
+
+    if color_disc:
+        fig_scatter = px.scatter(
+            clust_df, x=x_col, y=y_col,
+            color=color_col,
+            hover_data=hover_data,
+            labels={x_col: f"{projection_choice} 1", y_col: f"{projection_choice} 2",
+                    "_label": method_choice},
+        )
+    else:
+        fig_scatter = px.scatter(
+            clust_df, x=x_col, y=y_col,
+            color=color_col,
+            color_continuous_scale="RdBu",
+            color_continuous_midpoint=clust_df[color_col].median() if color_col in clust_df.columns else 0,
+            hover_data=hover_data,
+            labels={x_col: f"{projection_choice} 1", y_col: f"{projection_choice} 2"},
+        )
+
+    fig_scatter.update_traces(marker=dict(size=9, opacity=0.82))
+    dark_layout(fig_scatter, height=480)
+
+    if projection_choice == "PCA":
+        pca_info = clust_res.get("pca_info", {})
+        evr = pca_info.get("explained_variance_ratio", [])
+        if len(evr) >= 2:
+            fig_scatter.update_layout(
+                xaxis_title=f"PC1 ({evr[0]:.1%} var)",
+                yaxis_title=f"PC2 ({evr[1]:.1%} var)",
+            )
+
+    st.subheader(f"{projection_choice} Scatter — colored by {color_by}")
+    st.plotly_chart(fig_scatter, width="stretch")
+
+    st.markdown("---")
+
+    # ── K-Means diagnostics: elbow + silhouette ────────────────────────────────
+    st.subheader("K-Means Diagnostics — Elbow, Silhouette, Gap Statistic")
+    if km_diag:
+        k_vals = km_diag["k_values"]
+        inert  = km_diag["inertias"]
+        sils   = km_diag["silhouette_scores"]
+        gaps   = km_diag.get("gap_stats", [])
+
+        fig_diag = make_subplots(
+            rows=1, cols=3 if gaps else 2,
+            subplot_titles=["Inertia (Elbow)", "Silhouette Score", "Gap Statistic"] if gaps
+                           else ["Inertia (Elbow)", "Silhouette Score"],
+        )
+        fig_diag.add_trace(
+            go.Scatter(x=k_vals, y=inert, mode="lines+markers",
+                       line=dict(color="#3498db", width=2),
+                       marker=dict(size=8), name="Inertia"),
+            row=1, col=1,
+        )
+        fig_diag.add_trace(
+            go.Scatter(x=k_vals, y=sils, mode="lines+markers",
+                       line=dict(color=POS_COL, width=2),
+                       marker=dict(size=8), name="Silhouette"),
+            row=1, col=2,
+        )
+        if gaps:
+            fig_diag.add_trace(
+                go.Scatter(x=k_vals, y=gaps, mode="lines+markers",
+                           line=dict(color=SHIFT_COL, width=2),
+                           marker=dict(size=8), name="Gap"),
+                row=1, col=3,
+            )
+        # annotate optimal k
+        ok_idx = k_vals.index(optimal_k) if optimal_k in k_vals else 0
+        fig_diag.add_vline(x=optimal_k, line_dash="dash", line_color=SHIFT_COL,
+                           annotation_text=f"k={optimal_k}", annotation_font_color=SHIFT_COL)
+        dark_layout(fig_diag, height=300)
+        st.plotly_chart(fig_diag, width="stretch")
+        st.caption(f"Optimal k={optimal_k} selected by highest silhouette score ({best_sil:.3f}).")
+
+    st.markdown("---")
+
+    # ── Radar / spider charts per cluster archetype ────────────────────────────
+    st.subheader("Cluster Archetype Profiles (Radar Charts)")
+    st.caption("Z-scored feature values relative to cross-cluster mean. Outward = above average.")
+
+    RADAR_FEATURES = [
+        "sentiment_overall", "sentiment_divergence", "lm_uncertainty",
+        "lm_constraining", "fls_ratio", "modal_confidence",
+        "role_sentiment_variance", "avg_sentence_length",
+    ]
+    z_cols = [f"{f}_z" for f in RADAR_FEATURES]
+    available_z = [c for c in z_cols if c in prof_df.columns]
+    available_f = [c.replace("_z", "") for c in available_z]
+
+    if not prof_df.empty and available_z:
+        radar_labels = [f.replace("_", " ").title() for f in available_f]
+        n_clusters_show = len(prof_df)
+        cols_per_row = min(n_clusters_show, 3)
+        rows_needed = (n_clusters_show + cols_per_row - 1) // cols_per_row
+        radar_cols = st.columns(cols_per_row)
+        CLUSTER_COLORS_LIST = ["#3498db", "#2ecc71", "#e67e22", "#e74c3c", "#9b59b6"]
+
+        for idx, row in prof_df.iterrows():
+            col_idx = idx % cols_per_row
+            with radar_cols[col_idx]:
+                zvals = [float(row.get(c, 0)) for c in available_z]
+                zvals_closed = zvals + [zvals[0]]
+                labels_closed = radar_labels + [radar_labels[0]]
+
+                fig_radar = go.Figure(go.Scatterpolar(
+                    r=zvals_closed,
+                    theta=labels_closed,
+                    fill="toself",
+                    fillcolor=CLUSTER_COLORS_LIST[idx % len(CLUSTER_COLORS_LIST)].replace(")", ", 0.25)").replace("rgb", "rgba") if "rgb" not in CLUSTER_COLORS_LIST[idx % len(CLUSTER_COLORS_LIST)] else CLUSTER_COLORS_LIST[idx % len(CLUSTER_COLORS_LIST)],
+                    line=dict(color=CLUSTER_COLORS_LIST[idx % len(CLUSTER_COLORS_LIST)], width=2),
+                    name=row.get("archetype", f"Cluster {idx}"),
+                ))
+                cl_id = row.get("cluster", idx)
+                size = (clust_df["cluster_km"] == cl_id).sum()
+                fig_radar.update_layout(
+                    title=dict(
+                        text=f"<b>{row.get('archetype', f'Cluster {cl_id}')}</b><br>"
+                             f"<span style='font-size:11px'>n={size}</span>",
+                        font=dict(size=13, color="white"), x=0.5,
+                    ),
+                    polar=dict(
+                        bgcolor=DARK_BG,
+                        radialaxis=dict(visible=True, range=[-2, 2], color="#666", gridcolor="#333"),
+                        angularaxis=dict(color="#aaa", gridcolor="#333"),
+                    ),
+                    paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG,
+                    font=dict(color="white", size=10),
+                    showlegend=False,
+                    height=320,
+                    margin=dict(l=40, r=40, t=80, b=20),
+                )
+                st.plotly_chart(fig_radar, width="stretch")
+
+    st.markdown("---")
+
+    # ── Temporal migration ─────────────────────────────────────────────────────
+    st.subheader("Temporal Migration — How Companies Move Between Clusters")
+    st.caption("Each row shows a company's cluster archetype over time. Color = archetype.")
+
+    if cluster_col in clust_df.columns and "_label" in clust_df.columns:
+        temp_df = clust_df.sort_values(["ticker", "date"]).copy()
+        pivot_label = temp_df.pivot_table(
+            index="ticker", columns="quarter", values="_label", aggfunc="first"
+        )
+        pivot_num_raw = temp_df.pivot_table(
+            index="ticker", columns="quarter", values=cluster_col, aggfunc="first"
+        )
+        quarters_sorted = sorted(pivot_label.columns, key=lambda q: (int(q.split("-Q")[0]), int(q.split("-Q")[1])))
+        pivot_label = pivot_label.reindex(columns=quarters_sorted)
+
+        # build a numeric matrix for heatmap coloring
+        all_clusters = sorted(clust_df[cluster_col].dropna().unique())
+        cluster_num = {a: i for i, a in enumerate(all_clusters)}
+        pivot_num = pivot_num_raw.reindex(columns=quarters_sorted).map(
+            lambda x: cluster_num.get(x, -1) if pd.notna(x) else -1
+        )
+
+        text_matrix_str = np.where(
+            pd.isna(pivot_label.reindex(columns=quarters_sorted).values),
+            "",
+            [[str(v)[:18] if pd.notna(v) else "" for v in row]
+             for row in pivot_label.reindex(columns=quarters_sorted).values]
+        )
+
+        fig_mig = go.Figure(go.Heatmap(
+            z=pivot_num.values,
+            x=quarters_sorted,
+            y=pivot_label.index.tolist(),
+            text=text_matrix_str,
+            texttemplate="%{text}",
+            colorscale="Plasma",
+            showscale=False,
+            hoverongaps=False,
+            xgap=2, ygap=2,
+        ))
+        dark_layout(fig_mig, height=max(300, len(pivot_label) * 22),
+                    margin=dict(l=60, r=10, t=20, b=60))
+        fig_mig.update_layout(xaxis=dict(tickangle=-45, tickfont=dict(size=9)))
+        st.plotly_chart(fig_mig, width="stretch")
+        st.caption("Empty cells = no transcript available for that quarter.")
+
+    st.markdown("---")
+
+    # ── Returns by cluster ─────────────────────────────────────────────────────
+    st.subheader("3-Day Post-Earnings Returns by Cluster Archetype")
+    st.caption("Do linguistic archetypes predict market reaction?")
+
+    if cluster_col in clust_df.columns and "return_3d" in clust_df.columns:
+        ret_data = clust_df[[cluster_col, "_label", "return_3d"]].dropna()
+
+        if not ret_data.empty:
+            fig_box = px.box(
+                ret_data,
+                x="_label", y="return_3d",
+                color="_label",
+                points="all",
+                labels={"_label": method_choice, "return_3d": "3-Day Return"},
+            )
+            fig_box.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
+            dark_layout(fig_box, height=380)
+            fig_box.update_layout(
+                yaxis=dict(tickformat=".1%", gridcolor="#1e2530"),
+                showlegend=False,
+                xaxis=dict(tickfont=dict(size=10)),
+            )
+            # annotate KW result
+            if kw_p is not None:
+                sig_str = "significant" if kw_p < 0.05 else "not significant"
+                fig_box.add_annotation(
+                    x=0.01, y=0.97, xref="paper", yref="paper",
+                    text=f"Kruskal-Wallis H={returns_stats.get('kw_stat', 0):.2f}  "
+                         f"p={kw_p:.3f}  ({sig_str})",
+                    showarrow=False, font=dict(size=12, color=POS_COL if kw_p < 0.05 else NEU_COL),
+                    bgcolor=CARD_BG, bordercolor="#333", borderwidth=1, borderpad=6,
+                )
+            st.plotly_chart(fig_box, width="stretch")
+
+    # ── PCA scree plot ─────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("PCA Scree Plot — Explained Variance")
+    pca_info = clust_res.get("pca_info", {})
+    evr = pca_info.get("explained_variance_ratio", [])
+    cum = pca_info.get("cumulative_variance", [])
+
+    if evr:
+        fig_scree = make_subplots(specs=[[{"secondary_y": True}]])
+        pc_labels = [f"PC{i+1}" for i in range(len(evr))]
+        fig_scree.add_trace(
+            go.Bar(x=pc_labels, y=evr, name="Individual",
+                   marker_color="#3498db", opacity=0.8),
+            secondary_y=False,
+        )
+        fig_scree.add_trace(
+            go.Scatter(x=pc_labels, y=cum, name="Cumulative",
+                       line=dict(color=POS_COL, width=2), mode="lines+markers"),
+            secondary_y=True,
+        )
+        fig_scree.add_hline(y=0.90, line_dash="dash", line_color=SHIFT_COL,
+                            secondary_y=True,
+                            annotation_text="90%", annotation_font_color=SHIFT_COL)
+        dark_layout(fig_scree, height=300)
+        fig_scree.update_layout(
+            yaxis_title="Explained Variance (individual)",
+            yaxis2=dict(title="Cumulative Variance", tickformat=".0%", gridcolor="#1e2530"),
+            legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig_scree, width="stretch")
+
+    # ── company-level cluster summary table ────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Company Cluster Assignment Summary")
+    if "cluster_km" in clust_df.columns and "archetype" in clust_df.columns:
+        summary = (
+            clust_df.groupby("ticker")
+            .agg(
+                n_quarters=("quarter", "count"),
+                dominant_cluster=("cluster_km", lambda x: x.mode()[0]),
+                dominant_archetype=("archetype", lambda x: x.mode()[0] if x.notna().any() else "—"),
+                avg_sentiment=("sentiment_overall", "mean"),
+                avg_uncertainty=("lm_uncertainty", "mean"),
+                avg_return_3d=("return_3d", "mean"),
+            )
+            .reset_index()
+        )
+        summary["sector"] = summary["ticker"].map(TICKER_TO_SECTOR)
+        summary = summary.sort_values("dominant_archetype")
+
+        styled_summary = (
+            summary.set_index("ticker")
+            .style
+            .format({
+                "avg_sentiment":   "{:.3f}",
+                "avg_uncertainty": "{:.5f}",
+                "avg_return_3d":   "{:+.2%}",
+            })
+            .map(color_return, subset=["avg_return_3d"])
+        )
+        st.dataframe(styled_summary, width="stretch")

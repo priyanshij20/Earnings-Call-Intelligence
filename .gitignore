@@ -10,3 +10,4 @@ data/processed/
 notebooks/.ipynb_checkpoints/
 README_old.md
 project plan doc.pdf
+cluster_run.log

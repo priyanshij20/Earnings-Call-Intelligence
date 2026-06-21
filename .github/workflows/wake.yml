@@ -2,14 +2,37 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    - cron: "0 */12 * * *"   # every 12 hours
-  workflow_dispatch:          # allow manual trigger from GitHub Actions UI
+    - cron: "0 */6 * * *"    # ping every 6 hours
+    - cron: "0 9 */5 * *"    # commit-push every 5 days at 9am UTC
+  workflow_dispatch:
 
 jobs:
-  wake:
+  ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit app
+      - name: Wake Streamlit app (browser-like request)
         run: |
-          curl -s -o /dev/null -w "HTTP %{http_code}" \
+          # Follow redirects, mimic a real browser User-Agent, wait up to 60s
+          curl -L --max-time 60 --retry 3 --retry-delay 10 \
+            -H "User-Agent: Mozilla/5.0 (compatible; WakeBot/1.0)" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+            -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
             https://earnings-call-intelligence-pjain.streamlit.app/
+
+  keep-alive-commit:
+    runs-on: ubuntu-latest
+    # Only runs on the 5-day schedule, not every 6-hour ping
+    if: github.event.schedule == '0 9 */5 * *' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Touch keep-alive file and push
+        run: |
+          echo "Last wake: $(date -u '+%Y-%m-%d %H:%M UTC')" > .streamlit-keepalive
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .streamlit-keepalive
+          git commit -m "chore: keep Streamlit app alive [skip ci]"
+          git push

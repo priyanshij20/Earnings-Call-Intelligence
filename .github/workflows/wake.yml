@@ -2,31 +2,23 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    - cron: "0 */6 * * *"    # ping every 6 hours
-    - cron: "0 9 1,6,11,16,21,26 * *"  # commit every 5 days at 9am UTC
+    - cron: "0 9 */3 * *"  # every 3 days at 9am UTC
   workflow_dispatch:
 
 jobs:
-  ping:
+  keep-alive:
     runs-on: ubuntu-latest
-    continue-on-error: true   # never send failure emails for a ping
-    steps:
-      - name: Wake Streamlit app
-        run: |
-          STATUS=$(curl -L --max-time 60 --retry 2 --retry-delay 15 \
-            -H "User-Agent: Mozilla/5.0 (compatible; WakeBot/1.0)" \
-            -H "Accept: text/html,application/xhtml+xml,*/*;q=0.8" \
-            -o /dev/null -w "%{http_code}" \
-            https://earnings-call-intelligence-pjain.streamlit.app/ || echo "000")
-          echo "HTTP status: $STATUS"
-
-  keep-alive-commit:
-    runs-on: ubuntu-latest
-    if: contains(fromJson('["0 9 1,6,11,16,21,26 * *"]'), github.event.schedule) || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ping app
+        run: |
+          curl -sL --max-time 60 \
+            -H "User-Agent: Mozilla/5.0 (compatible; WakeBot/1.0)" \
+            -o /dev/null -w "HTTP %{http_code}\n" \
+            https://earnings-call-intelligence-pjain.streamlit.app/ || true
 
       - name: Push keep-alive commit
         run: |
